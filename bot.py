@@ -13,6 +13,7 @@
 import asyncio
 import random
 import logging
+import os
 from datetime import datetime, timezone, timedelta
 
 from aiogram import Bot, Dispatcher, F
@@ -26,12 +27,12 @@ from aiogram.types import (
 )
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  НАСТРОЙКИ
+#  НАСТРОЙКИ — читаются из переменных окружения Railway
 # ──────────────────────────────────────────────────────────────────────────────
 
-BOT_TOKEN     = "8674761035:AAGL1KI7ybeczBhqKKs-EbTpgUlgWZc7778"       # @BotFather
-ADMIN_USER_ID = 1204798761              # твой Telegram ID (@userinfobot)
-ADMIN_CHAT_ID = -1003811757554         # ID группы куда летят ответы
+BOT_TOKEN     = os.getenv("BOT_TOKEN")
+ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0"))
+ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0"))
 
 CAFE_NAME     = "Black Fish kafesı"
 CAFE_ADDRESS  = "улица Гагарина, 1В Карабалык"
@@ -39,8 +40,8 @@ EVENT_DATE    = "10 марта"
 EVENT_TIME    = "19:00"
 
 # Точное время события для авто-напоминания (UTC)
-# Если твой часовой пояс UTC+5, то 19:00 местного = 14:00 UTC
-EVENT_DATETIME_UTC = datetime(2026, 3, 8, 14, 0, tzinfo=timezone.utc)
+# UTC+5: 19:00 местного = 14:00 UTC
+EVENT_DATETIME_UTC = datetime(2026, 3, 10, 14, 0, tzinfo=timezone.utc)
 
 # Список username для /invite (без @)
 INVITE_LIST = [
@@ -73,11 +74,11 @@ dp  = Dispatcher()
 
 # ─── ХРАНИЛИЩЕ В ПАМЯТИ ───────────────────────────────────────────────────────
 
-user_colors:   dict[int, str]  = {}  # {user_id: color}
-user_answered: dict[int, str]  = {}  # {user_id: ответ}  ← блокировка
-user_names:    dict[int, str]  = {}  # {user_id: full_name}
-user_usernames: dict[int, str] = {}  # {user_id: @username или ""}
-auto_reminder_sent: set[int]   = set()  # кому уже отправили авто-напоминание
+user_colors:   dict[int, str]  = {}
+user_answered: dict[int, str]  = {}
+user_names:    dict[int, str]  = {}
+user_usernames: dict[int, str] = {}
+auto_reminder_sent: set[int]   = set()
 
 # ─── КЛАВИАТУРЫ ───────────────────────────────────────────────────────────────
 
@@ -111,6 +112,10 @@ def build_invite(color: str) -> str:
         "Мы собираем небольшую компанию на вечер в кафе "
         f"в честь <b>International Women's Day</b>.\n"
         "Только приятные люди, уютная атмосфера и хороший вечер.\n\n"
+        f"📍 <b>Место:</b> кафе {CAFE_NAME}\n"
+        f"📅 <b>Дата:</b> {EVENT_DATE}\n"
+        f"🕒 <b>Время:</b> {EVENT_TIME}\n\n"
+        f"👗 <b>Твой дресс-код:</b> случайно выпал цвет — <b>{color}</b>.\n"
         "<i>Каждой гостье свой цвет — получится необычная атмосфера.</i>\n\n"
         "✨ Музыка, живое общение и приятная компания гарантированы.\n\n"
         "Количество мест ограничено — нажми кнопку ниже ⬇️"
@@ -159,8 +164,8 @@ async def is_locked(message: Message) -> bool:
 
 def save_user(message: Message) -> None:
     uid = message.from_user.id
-    user_names[uid]     = message.from_user.full_name
-    user_usernames[uid] = f"@{message.from_user.username}" if message.from_user.username else ""
+    user_names[uid]      = message.from_user.full_name
+    user_usernames[uid]  = f"@{message.from_user.username}" if message.from_user.username else ""
 
 # ─── /start ───────────────────────────────────────────────────────────────────
 
@@ -219,10 +224,10 @@ async def cmd_stats(message: Message) -> None:
         await message.answer("⛔️ Нет доступа.")
         return
 
-    coming  = sum(1 for v in user_answered.values() if v == "Приду 🌸")
-    maybe   = sum(1 for v in user_answered.values() if v == "Возможно 🤔")
-    no      = sum(1 for v in user_answered.values() if v == "Не смогу ❌")
-    total   = len(user_answered)
+    coming = sum(1 for v in user_answered.values() if v == "Приду 🌸")
+    maybe  = sum(1 for v in user_answered.values() if v == "Возможно 🤔")
+    no     = sum(1 for v in user_answered.values() if v == "Не смогу ❌")
+    total  = len(user_answered)
 
     await message.answer(
         "📊 <b>Статистика ответов</b>\n\n"
@@ -400,18 +405,11 @@ async def fallback(message: Message) -> None:
 # ─── АВТО-НАПОМИНАНИЕ ─────────────────────────────────────────────────────────
 
 async def auto_reminder_task() -> None:
-    """
-    Каждую минуту проверяет: до события осталось ~2 часа?
-    Если да — рассылает напоминание тем, кто ответил «Приду» или «Возможно»,
-    и кому ещё не отправляли.
-    """
     logger.info("⏰ Авто-напоминание: задача запущена")
     while True:
         await asyncio.sleep(60)
-
-        now    = datetime.now(timezone.utc)
-        delta  = EVENT_DATETIME_UTC - now
-        # Окно: от 2ч 1мин до 1ч 59мин до события
+        now   = datetime.now(timezone.utc)
+        delta = EVENT_DATETIME_UTC - now
         if timedelta(hours=1, minutes=59) <= delta <= timedelta(hours=2, minutes=1):
             targets = [
                 uid for uid, ans in user_answered.items()
